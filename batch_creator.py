@@ -4,6 +4,7 @@ import random
 import cv2
 import os
 
+
 class BatchCreator:
     """The batch creator outputs training examples by cropping samples of desired
     size from the full sized textures. Since loading large sized textures into memory
@@ -11,10 +12,10 @@ class BatchCreator:
     multiple training samples), the class also allows the user to control
     how often new images are loaded and how many are kept in the memory at the same time.
     """
-    
+
     def __init__(self, dir_x, dir_y, max_open=5, resin=(256, 256), resout=(256, 256),
-                 batch_size = 8, p_load=0.1, debug=False, bwx = False,
-                 bwy = False):
+                 batch_size=8, p_load=0.1, debug=False, bwx=False,
+                 bwy=False):
         self.dir_x = dir_x
         self.dir_y = dir_y
         self.resin = resin
@@ -34,11 +35,10 @@ class BatchCreator:
                 self.names.append((self.dir_x + name,
                                    self.dir_y + yname))
         random.shuffle(self.names)
-            
+
         self.loaded_imgs = deque(maxlen=max_open)
         for _ in range(max_open):
             self._loadNew()
-
 
     def _loadNew(self):
         pair = random.choice(self.names)
@@ -47,11 +47,11 @@ class BatchCreator:
             imgx = cv2.imread(pair[0])
             imgx = 2*(imgx/256-0.5)
             if self.bwx:
-                imgx = imgx[:,:,0].reshape((*self.imgx.shape[:2], 1))
+                imgx = imgx[:, :, 0].reshape((*self.imgx.shape[:2], 1))
             imgy = cv2.imread(pair[1])
             imgy = 2*(imgy/256-0.5)
             if self.bwy:
-                imgy = imgy[:,:,0].reshape((*imgy.shape[:2], 1))
+                imgy = imgy[:, :, 0].reshape((*imgy.shape[:2], 1))
             print("Loaded new image: {}".format(pair[0]))
             self.loaded_imgs.append((imgx, imgy))
         except:
@@ -59,14 +59,14 @@ class BatchCreator:
 
     def preprocess(self, img):
         return img/128.-1.
+
     def deprocess(self, img):
         return ((img+1.)*128).astype(int)
 
-        
     def getBatch(self):
         if random.random() < self.p_load:
             self._loadNew()
-            
+
         batchx = []
         batchy = []
 
