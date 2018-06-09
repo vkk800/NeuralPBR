@@ -1,31 +1,53 @@
+"""Models for transforming images into PBR texture maps.
+At the moment, the models included are:
+- "Simplenet": Just a few trainable convolutional filters stacked.
+- Custom U-Net: U-Net inspired architecture that should have some context awareness.
+- Cropped U-Net: Optimized version of the U-Net that can have context awareness of
+    a larger region than is being transformed.
+- Plus some other half-assed experimental ideas.
+
+TODO:
+- Test the quality of the U-Nets by training them on a beefier GPU.
+- Do some hyperparameter optimization for all of the nets.
+- Invent some new models. Check e.g. the literature on other image segmentation
+    architectures (SegNet, DeepLab, dilated convnets, etc.).
+"""
+
 import keras
 from keras.layers import *
 from keras.utils import plot_model
 
 
-def convblock(input_level, feats):
+def convblock(input_level, feats, nconvs=2):
     """A block that is four pixels smaller than the input.
     Used in the various models below.
+
+    # Arguments
+        input_level: Keras layer. Input for the block.
+        feats: Int. Number of feature channels.
+        nconvs: Int. How many 3x3 convolutions to apply.
+
+    # Returns
+        Keras layer after one 1x1 convolution and `nconvs` 3x3 convolutions
+        have been applied to the input.
     """
     out = Conv2D(feats, (1, 1), activation='relu',
                  padding='valid')(input_level)
-    out = Conv2D(feats, (3, 3), activation='relu', padding='valid')(out)
-    out = Conv2D(feats, (3, 3), activation='relu', padding='valid')(out)
-    return out
-
-
-def convblock_cheap(input_level, feats):
-    """A block that is two pixels smaller than the input
-    """
-    out = Conv2D(feats, (1, 1), activation='relu',
-                 padding='valid')(input_level)
-    out = Conv2D(feats, (3, 3), activation='relu', padding='valid')(out)
+    for _ in range(nconvs):
+        out = Conv2D(feats, (3, 3), activation='relu', padding='valid')(out)
     return out
 
 
 def get_crop(larger, smaller):
     """Computes the number of pixels that need to be cropped in order to make
     the two layers the same size.
+
+    # Arguments
+        larger: Keras layer. The larger of the two inputs.
+        smalle: Keras layer. The smaller of the two inputs.
+
+    # Returns
+        Tuple of two ints. The right cropping size for width and height.
     """
     dwidth = (larger.get_shape()[1]-smaller.get_shape()[1]).value
     dheight = (larger.get_shape()[2]-smaller.get_shape()[2]).value
@@ -36,20 +58,12 @@ def get_crop(larger, smaller):
     return (cropw, croph)
 
 
-def create_net_simple(size_in=(64, 64), chans_in=3, chans_out=3, nfeats=32,
-                      depth=3, pooling='max'):
+def create_simplenet(size_in=(64, 64), chans_in=3, chans_out=3, nfeats=32, **kwargs):
     """A simple model that just applies a bunch of convolutions without any context
     awareness.
     """
-
-    if pooling == 'max':
-        PoolingFun = MaxPooling2D
-    elif pooling == 'avg':
-        PoolingFun = AveragePooling2D
-    else:
-        raise AttributeError("Invalid pooling function")
-
     input_layer = Input(shape=(*size_in, chans_in))
+
     x = Conv2D(nfeats, (1, 1), padding='valid', activation='relu')(input_layer)
     x = Conv2D(nfeats, (5, 5), padding='valid', activation='relu')(x)
     x = Conv2D(nfeats, (5, 5), padding='valid', activation='relu')(x)
@@ -61,9 +75,10 @@ def create_net_simple(size_in=(64, 64), chans_in=3, chans_out=3, nfeats=32,
 
 
 def create_unet(size_in=(512, 512), chans_in=3, chans_out=3, nfeats=32,
-                depth=3, pooling='max'):
+                depth=3, pooling='max', nconvs=1):
     """Unet style model with adjustable depth and number of features per
-    layer.
+    layer. The difference to the "original Unet" is that the output is not
+    a segmentation map, but an image `chans_out` number of color channels.
     """
 
     if pooling == 'max':
@@ -79,15 +94,16 @@ def create_unet(size_in=(512, 512), chans_in=3, chans_out=3, nfeats=32,
     levelsdn = [convblock(input_layer, nfeats)]
     for i in range(depth):
         newlayer = PoolingFun(pool_size=(2, 2))(levelsdn[-1])
-        levelsdn.append(convblock(newlayer, nfeats*2**(i+1)))
+        levelsdn.append(convblock(newlayer, nfeats*2**(i+1), nconvs=nconvs))
 
     # The lowest level
     lowest = Conv2D(nfeats*2**(depth+1), (1, 1),
                     activation='relu')(levelsdn[-1])
-    lowest = Conv2D(nfeats*2**(depth+1), (3, 3),
-                    activation='relu', padding='valid')(lowest)
-    lowest = Conv2D(nfeats*2**(depth+1), (3, 3),
-                    activation='relu', padding='valid')(lowest)
+    for _ in range(nconvs):
+        lowest = Conv2D(nfeats*2**(depth+1), (3, 3),
+                        activation='relu', padding='valid')(lowest)
+        lowest = Conv2D(nfeats*2**(depth+1), (3, 3),
+                        activation='relu', padding='valid')(lowest)
     lowest = Conv2D(nfeats*2**(depth+1), (1, 1), activation='relu')(lowest)
 
     # The upscaling branch
@@ -97,57 +113,18 @@ def create_unet(size_in=(512, 512), chans_in=3, chans_out=3, nfeats=32,
         cropped = Cropping2D(cropping=get_crop(
             levelsdn[-(i+2)], upsampled))(levelsdn[-(i+2)])
         conc = Concatenate()([upsampled, cropped])
-        levelsup.append(convblock(conc, nfeats*2**(depth-i-1)))
+        levelsup.append(convblock(conc, nfeats*2**(depth-i-1), nconvs=nconvs))
 
     output = Conv2D(chans_out, (1, 1), activation=None)(levelsup[-1])
-
     model = keras.Model(inputs=input_layer, outputs=output)
-    return model
 
-
-def create_unet_cheap(size_in=(512, 512), chans_in=3, chans_out=3, nfeats=32,
-                      depth=2, pooling='avg'):
-    """A cheaper variation of Unet.
-    """
-
-    if pooling == 'max':
-        PoolingFun = MaxPooling2D
-    elif pooling == 'avg':
-        PoolingFun = AveragePooling2D
-    else:
-        raise AttributeError("Invalid pooling function")
-
-    input_layer = Input(shape=(*size_in, chans_in))
-
-    levelsdn = [convblock(input_layer, nfeats)]
-    for i in range(depth):
-        newlayer = PoolingFun(pool_size=4)(levelsdn[-1])
-        levelsdn.append(convblock_cheap(newlayer, nfeats*2**(i+1)))
-
-    lowest = Conv2D(nfeats*2**(depth+1), (1, 1),
-                    activation='relu')(levelsdn[-1])
-    lowest = Conv2D(nfeats*2**(depth+1), (3, 3),
-                    activation='relu', padding='valid')(lowest)
-    lowest = Conv2D(nfeats*2**(depth+1), (1, 1), activation='relu')(lowest)
-
-    levelsup = [lowest]
-    for i in range(depth):
-        upsampled = UpSampling2D(size=(4, 4))(levelsup[-1])
-        cropped = Cropping2D(cropping=get_crop(
-            levelsdn[-(i+2)], upsampled))(levelsdn[-(i+2)])
-        conc = Concatenate()([upsampled, cropped])
-        levelsup.append(convblock_cheap(conc, nfeats*2**(depth-i-1)))
-
-    output = Conv2D(chans_out, (1, 1), activation=None)(levelsup[-1])
-
-    model = keras.Model(inputs=input_layer, outputs=output)
     return model
 
 
 def create_cropped_unet(size_in=(1024, 1024), cropped_size=(256, 256),
                         chans_in=3, chans_out=3, nfeats=32,
                         depth=2, pool_factor=4, pooling='avg',
-                        cheap_convs=True):
+                        nconvs=1):
     """An experimental variation of the unets above where the context
     information of the created map comes from a larger patch of the
     picture than the transformed image itself. This is a trick to
@@ -161,11 +138,6 @@ def create_cropped_unet(size_in=(1024, 1024), cropped_size=(256, 256),
     else:
         raise AttributeError("Invalid pooling function")
 
-    if cheap_convs:
-        convfun = convblock_cheap
-    else:
-        convfun = convblock
-
     input_layer = Input(shape=(*size_in, chans_in))
     cropped_input = Cropping2D(cropping=((size_in[0]-cropped_size[0])//2-2,
                                          (size_in[1]-cropped_size[1])//2-2))(input_layer)
@@ -174,7 +146,7 @@ def create_cropped_unet(size_in=(1024, 1024), cropped_size=(256, 256),
     levelsdn = [input_layer]
     for i in range(depth):
         newlayer = PoolingFun(pool_size=pool_factor)(levelsdn[-1])
-        levelsdn.append(convfun(newlayer, nfeats*2**(i+1)))
+        levelsdn.append(convblock(newlayer, nfeats*2**(i+1), nconvs=nconvs))
 
     # The lowest level
     lowest = Conv2D(nfeats*2**(depth+1), (1, 1),
@@ -190,7 +162,7 @@ def create_cropped_unet(size_in=(1024, 1024), cropped_size=(256, 256),
         cropped = Cropping2D(cropping=get_crop(
             levelsdn[-(i+2)], upsampled))(levelsdn[-(i+2)])
         total = Concatenate()([upsampled, cropped])
-        levelsup.append(convfun(total, nfeats*2**(depth-i-1)))
+        levelsup.append(convblock(total, nfeats*2**(depth-i-1), nconvs=nconvs))
 
     output_cropped = Cropping2D(cropping=get_crop(
         levelsup[-1], cropped_input))(levelsup[-1])

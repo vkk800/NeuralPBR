@@ -11,9 +11,21 @@ class BatchCreator:
     can become a bottleneck for performance (and also because single image can be used for
     multiple training samples), the class also allows the user to control
     how often new images are loaded and how many are kept in the memory at the same time.
+
+    # Arguments
+        dir_x: String. Path for source textures.
+        dir_y: String. Path for target textures (roughness, normal, etc.).
+        max_open: Int. How many images to keep loaded at the same time.
+        resin: Tuple of two ints. Resolution of cropped inputs.
+        resout: Tuple of two ints. Resolution of cropped outputs.
+        batch_size: Int. Number of images in a batch.
+        p_load: Float between 0 and 1. The probability to load a new image on each new iteration.
+        debug: Boolean. Print some helpful information while working.
+        bwx: Boolean. Whether to convert the inputs to black-and-white.
+        bwy: Boolean. Whether to convert the outputs to black-and-whie.
     """
 
-    def __init__(self, dir_x, dir_y, max_open=5, resin=(256, 256), resout=(256, 256),
+    def __init__(self, dir_x, dir_y, max_open=16, resin=(256, 256), resout=(256, 256),
                  batch_size=8, p_load=0.1, debug=False, bwx=False,
                  bwy=False):
         self.dir_x = dir_x
@@ -58,12 +70,22 @@ class BatchCreator:
             print("Loading a new image failed. Continuing...")
 
     def preprocess(self, img):
+        """Converts an image from the standard 0-255 integer representation
+        to a float in the range (-1, 1).
+        """
         return img/128.-1.
 
     def deprocess(self, img):
+        """Inverse operation of `preprocess()`
+        """
         return ((img+1.)*128).astype(int)
 
-    def getBatch(self):
+    def __iter__(self):
+        """This class can be used as an iterator.
+        """
+        return self
+
+    def __next__(self):
         if random.random() < self.p_load:
             self._loadNew()
 
