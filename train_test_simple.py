@@ -1,3 +1,11 @@
+"""Trains Simplenet (see `model.py` documentation) to compute displacement maps
+and saves some example results along with the weights after training.
+
+Simplenet lacks any context awareness and thus the results are not very good.
+This is more of a proof-of-concept to show that my training approach produces
+anything meaningful at all. 
+"""
+
 import numpy as np
 from neuralpbr.model import *
 import keras as K
@@ -17,7 +25,7 @@ generator = bc.BatchCreator('data/colscrop/',
                             batch_size=16, p_load=0.5, debug=False,
                             bwy=True)
 
-steps = 100
+steps = 5
 simplenet.compile(keras.optimizers.SGD(lr=0.05, momentum=0.5,
                                        decay=0.95), loss=keras.losses.mean_squared_error)
 try:
@@ -53,10 +61,6 @@ for i in range(nsamples):
     ytrue = [generator.deprocess(img) for img in y]
     xtrue = [generator.deprocess(img) for img in x]
     ypredtrue = [generator.deprocess(img) for img in preds]
-
-# for i, img in enumerate(xtrue):
-#     cv2.imwrite("src"+str(i)+".png", img)
-# for i, img in enumerate(ytrue):
-#     cv2.imwrite("true"+str(i)+".png", img)
-# for i, img in enumerate(ypredtrue):
-#     cv2.imwrite("pred"+str(i)+".png", img)
+    cv2.imwrite("samples/src"+str(i)+".png", xtrue[0])
+    cv2.imwrite("samples/true"+str(i)+".png", ytrue[0])
+    cv2.imwrite("samples/pred"+str(i)+".png", ypredtrue[0])
