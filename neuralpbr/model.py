@@ -4,10 +4,13 @@ At the moment, the models included are:
 - Custom U-Net: U-Net inspired architecture that should have some context awareness.
 - Cropped U-Net: Optimized version of the U-Net that can have context awareness of
     a larger region than is being transformed.
+- Autoencoder type model.
 - Plus some other half-assed experimental ideas.
+Some of these are completely untested and the rest have only gone through
+some preliminary sanity checks. More thorough testing is required.
 
 TODO:
-- Test the quality of the U-Nets by training them on a beefier GPU.
+- Test the quality of the nets by training them on a beefier GPU.
 - Do some hyperparameter optimization for all of the nets.
 - Invent some new models. Check e.g. the literature on other image segmentation
     architectures (SegNet, DeepLab, dilated convnets, etc.).
@@ -58,16 +61,36 @@ def get_crop(larger, smaller):
     return (cropw, croph)
 
 
-def create_simplenet(size_in=(64, 64), chans_in=3, chans_out=3, nfeats=32, **kwargs):
+def create_simplenet(size_in=(64, 64), chans_in=3, chans_out=3,
+                     nfeats=32, layers=2, **kwargs):
     """A simple model that just applies a bunch of convolutions without any context
     awareness.
     """
     input_layer = Input(shape=(*size_in, chans_in))
 
     x = Conv2D(nfeats, (1, 1), padding='valid', activation='relu')(input_layer)
-    x = Conv2D(nfeats, (5, 5), padding='valid', activation='relu')(x)
-    x = Conv2D(nfeats, (5, 5), padding='valid', activation='relu')(x)
-    x = Conv2D(chans_out, (1, 1), padding='valid', activation=None)(x)
+    for _ in range(layers):
+            x = Conv2D(nfeats, (5, 5), padding='valid', activation='relu')(x)
+    x = Conv2D(chans_out, (1, 1), padding='valid', activation='sigmoid')(x)
+
+    model = keras.Model(inputs=input_layer, outputs=x)
+
+    return model
+
+
+def create_dilated_simplenet(size_in=(64, 64), chans_in=3, chans_out=3,
+                             nfeats=32, layers=2, **kwargs):
+    """A simple model that just applies a bunch of convolutions without any context
+    awareness.
+    """
+    input_layer = Input(shape=(*size_in, chans_in))
+
+    x = Conv2D(nfeats, (1, 1), padding='valid', activation='relu')(input_layer)
+    x = Conv2D(nfeats, (3, 3), padding='valid', activation='relu')(x)
+    for _ in range(layers):
+        x = Conv2D(nfeats, (3, 3), padding='valid', activation='relu', dilation_rate=3)(x)
+    x = Conv2D(nfeats, (3, 3), padding='valid', activation='relu')(x)
+    x = Conv2D(chans_out, (1, 1), padding='valid', activation='sigmoid')(x)
 
     model = keras.Model(inputs=input_layer, outputs=x)
 
@@ -115,11 +138,37 @@ def create_unet(size_in=(512, 512), chans_in=3, chans_out=3, nfeats=32,
         conc = Concatenate()([upsampled, cropped])
         levelsup.append(convblock(conc, nfeats*2**(depth-i-1), nconvs=nconvs))
 
-    output = Conv2D(chans_out, (1, 1), activation=None)(levelsup[-1])
+    output = Conv2D(chans_out, (1, 1), activation='sigmoid')(levelsup[-1])
     model = keras.Model(inputs=input_layer, outputs=output)
 
     return model
 
+
+def create_autoencoder(size_in=(512, 512), chans_in=3, chans_out=3,
+                       nfeats=32, depth=2):
+    """Autoencoder model.
+    """
+
+    input_layer = Input(shape=(*size_in, chans_in))
+    x = input_layer
+    
+    for i in range(depth):
+        x = Conv2D(nfeats*2**(depth-i-1), (3, 3), padding='same', strides=2)(x)
+        x = BatchNormalization()(x)
+        x = Activation('relu')(x)
+        x = Conv2D(nfeats*2**(depth-i-1), (3, 3), padding='same')(x)
+        x = BatchNormalization()(x)
+        x = Activation('relu')(x)
+
+    for i in range(depth):
+        x = Conv2D(nfeats*2**i, (3, 3), activation='relu', padding='same')(x)
+        x = Conv2D(nfeats*2**i, (3, 3), activation='relu', padding='same')(x)
+        x = UpSampling2D((2, 2))(x)
+
+    output = Conv2D(chans_out, (3, 3), activation='sigmoid', padding='same')(x)
+    model = keras.Model(input_layer, output)
+    return model
+    
 
 def create_cropped_unet(size_in=(1024, 1024), cropped_size=(256, 256),
                         chans_in=3, chans_out=3, nfeats=32,
@@ -171,7 +220,7 @@ def create_cropped_unet(size_in=(1024, 1024), cropped_size=(256, 256),
     output_cropped = Conv2D(
         nfeats, (3, 3), activation='relu', padding='valid')(output_cropped)
     output_cropped = Conv2D(nfeats, (1, 1), activation='relu')(output_cropped)
-    output = Conv2D(chans_out, (1, 1), activation=None)(output_cropped)
+    output = Conv2D(chans_out, (1, 1), activation='sigmoid')(output_cropped)
 
     model = keras.Model(inputs=input_layer, outputs=output)
     return model
@@ -218,7 +267,7 @@ def model5(size_in=(512, 512), chans_in=3, chans_out=3, nfeats=32,
     x0_2 = Concatenate()([up0, crop0])
     x0_2 = convblock_cheap(x0_1, nfeats)
 
-    out = Conv2D(chans_out, (1, 1), activation=None)(x0_2)
+    out = Conv2D(chans_out, (1, 1), activation='sigmoid')(x0_2)
 
     model = keras.Model(inputs=input_layer, outputs=out)
 
